@@ -1,5 +1,24 @@
 #include "xil_printf.h"
 #include "vdma.h"
+#include "sleep.h"
+#include "xaxivdma_hw.h"
+
+/* Reset only capture, leaving the HDMI read channel running. */
+int vdma_write_reset(short DeviceID)
+{
+	XAxiVdma_Config *Config = XAxiVdma_LookupConfig(DeviceID);
+	u32 timeout;
+	UINTPTR control;
+	if (Config == NULL) return XST_FAILURE;
+	control = Config->BaseAddress + XAXIVDMA_RX_OFFSET + XAXIVDMA_CR_OFFSET;
+	Xil_Out32(control, Xil_In32(control) | XAXIVDMA_CR_RESET_MASK);
+	for (timeout = 0; timeout < 1000; ++timeout) {
+		if (!(Xil_In32(control) & XAXIVDMA_CR_RESET_MASK)) return XST_SUCCESS;
+		usleep(1000);
+	}
+	xil_printf("Camera VDMA reset timed out: CR=0x%08x\r\n", Xil_In32(control));
+	return XST_FAILURE;
+}
 
 u32 vdma_version(XAxiVdma *Vdma) {
 	return XAxiVdma_GetVersion(Vdma);
@@ -114,7 +133,7 @@ int vdma_write_init(short DeviceID,short HoriSizeInput,short VertSizeInput,short
 {
 	XAxiVdma Vdma;
 	XAxiVdma_Config *Config;
-	XAxiVdma_DmaSetup WriteCfg;
+	XAxiVdma_DmaSetup WriteCfg = {0};
 	int Status;
 
 
@@ -154,7 +173,13 @@ int vdma_write_init(short DeviceID,short HoriSizeInput,short VertSizeInput,short
 	}
 
 
-	WriteCfg.FrameStoreStartAddr[0] = FrameStoreStartAddr;
+	/* The driver reads every hardware frame-store entry, even in park mode. */
+	{
+		unsigned int i;
+		for (i = 0; i < sizeof(WriteCfg.FrameStoreStartAddr) /
+			sizeof(WriteCfg.FrameStoreStartAddr[0]); ++i)
+			WriteCfg.FrameStoreStartAddr[i] = FrameStoreStartAddr;
+	}
 
 	Status = XAxiVdma_DmaSetBufferAddr(&Vdma, XAXIVDMA_WRITE, WriteCfg.FrameStoreStartAddr);
 	if (Status != XST_SUCCESS) {
@@ -163,6 +188,13 @@ int vdma_write_init(short DeviceID,short HoriSizeInput,short VertSizeInput,short
 	}
 
 
+	/* Poll frame-completion status with a threshold of one frame. */
+	{
+		UINTPTR control = Config->BaseAddress + XAXIVDMA_RX_OFFSET + XAXIVDMA_CR_OFFSET;
+		u32 value = Xil_In32(control);
+		value = (value & ~XAXIVDMA_FRMCNT_MASK) | (1U << XAXIVDMA_FRMCNT_SHIFT);
+		Xil_Out32(control, value);
+	}
 	Status = vdma_write_start(&Vdma);
 	if (Status != XST_SUCCESS) {
 		   xil_printf("error starting VDMA..!");

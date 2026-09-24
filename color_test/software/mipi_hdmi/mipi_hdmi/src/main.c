@@ -63,6 +63,7 @@
 #include "MIPI_D_PHY_RX.h"
 #include "ov5640.h"
 #include "xgpiops.h"
+#include "xaxivdma_hw.h"
 /*
  * XPAR redefines
  */
@@ -104,6 +105,87 @@ u8 *pFrames[DISPLAY_NUM_FRAMES]; //array of pointers to the frame buffers
 /* ------------------------------------------------------------ */
 int PsGpioSetup() ;
 
+#define CAMERA_START_ATTEMPTS 3
+#define CAMERA_S2MM_STATUS (XPAR_AXIVDMA_1_BASEADDR + XAXIVDMA_RX_OFFSET + XAXIVDMA_SR_OFFSET)
+
+/* Count fresh packets and completed writes, not just a readable sensor ID. */
+static int CameraCheck(int verbose)
+{
+	u32 packets_before, packets_after, crc_before, crc_after, status;
+	int healthy;
+	Xil_Out32(CAMERA_S2MM_STATUS, XAXIVDMA_IXR_FRMCNT_MASK);
+	packets_before = Xil_In32(XPAR_MIPI_CSI_2_RX_0_S_AXI_LITE_BASEADDR + 0x04);
+	crc_before = Xil_In32(XPAR_MIPI_CSI_2_RX_0_S_AXI_LITE_BASEADDR + 0x08);
+	usleep(2000000);
+	packets_after = Xil_In32(XPAR_MIPI_CSI_2_RX_0_S_AXI_LITE_BASEADDR + 0x04);
+	crc_after = Xil_In32(XPAR_MIPI_CSI_2_RX_0_S_AXI_LITE_BASEADDR + 0x08);
+	status = Xil_In32(CAMERA_S2MM_STATUS);
+	healthy = packets_after != packets_before && crc_after == crc_before &&
+		(status & XAXIVDMA_IXR_FRMCNT_MASK) &&
+		!(status & (XAXIVDMA_SR_HALTED_MASK | XAXIVDMA_SR_ERR_ALL_MASK));
+	if (verbose || !healthy) {
+		xil_printf("CSI long packets: %u -> %u, CRC errors: %u -> %u\r\n",
+			packets_before, packets_after, crc_before, crc_after);
+		xil_printf("Camera VDMA S2MM status: 0x%08x, frame completed: %u\r\n",
+			status, (status & XAXIVDMA_IXR_FRMCNT_MASK) != 0);
+	}
+	return healthy ? XST_SUCCESS : XST_FAILURE;
+}
+
+static int CameraStart(void)
+{
+	int attempt, status;
+	for (attempt = 1; attempt <= CAMERA_START_ATTEMPTS; ++attempt) {
+		xil_printf("Camera start attempt %d/%d\r\n", attempt, CAMERA_START_ATTEMPTS);
+		/* Quiesce DDR writes before stopping the sensor or redrawing bars. */
+		if (vdma_write_reset(XPAR_AXIVDMA_1_DEVICE_ID) != XST_SUCCESS) {
+			xil_printf("Capture reset failed; check capture clocks/reset\r\n");
+			return XST_FAILURE;
+		}
+		DemoPrintTest(dispCtrl.framePtr[dispCtrl.curFrame], dispCtrl.vMode.width,
+			dispCtrl.vMode.height, DEMO_STRIDE, 0);
+		XGpioPs_WritePin(&Gpio, 54, 0);
+		usleep(1000000);
+		XGpioPs_WritePin(&Gpio, 54, 1);
+		usleep(1000000);
+		status = i2c_init(&ps_i2c0, XPAR_XIICPS_0_DEVICE_ID, 100000);
+		if (status != XST_SUCCESS) {
+			xil_printf("Camera I2C reinitialization failed: %d\r\n", status);
+			continue;
+		}
+		status = sensor_configure(&ps_i2c0);
+		if (status != XST_SUCCESS) {
+			xil_printf("Camera configuration failed: %d\r\n", status);
+			continue;
+		}
+		status = vdma_write_init(XPAR_AXIVDMA_1_DEVICE_ID, HORSIZE, VERSIZE,
+			DEMO_STRIDE, (unsigned int)dispCtrl.framePtr[dispCtrl.curFrame]);
+		if (status != XST_SUCCESS) {
+			xil_printf("Camera VDMA initialization failed: %d\r\n", status);
+			continue;
+		}
+		status = sensor_start(&ps_i2c0);
+		if (status != XST_SUCCESS) {
+			xil_printf("Camera stream start failed: %d\r\n", status);
+			continue;
+		}
+		if (CameraCheck(1) == XST_SUCCESS) {
+			xil_printf("Camera capture ready on attempt %d\r\n", attempt);
+			return XST_SUCCESS;
+		}
+		xil_printf("Camera capture unhealthy; retrying initialization\r\n");
+	}
+	/* Leave a diagnostic pattern only after capture can no longer overwrite it. */
+	if (vdma_write_reset(XPAR_AXIVDMA_1_DEVICE_ID) == XST_SUCCESS) {
+		XGpioPs_WritePin(&Gpio, 54, 0);
+		DemoPrintTest(dispCtrl.framePtr[dispCtrl.curFrame], dispCtrl.vMode.width,
+			dispCtrl.vMode.height, DEMO_STRIDE, 0);
+	}
+	xil_printf("Camera failed after %d attempts; inspect MIPI clocks/reset and cable\r\n",
+		CAMERA_START_ATTEMPTS);
+	return XST_FAILURE;
+}
+
 int main()
 {
 
@@ -112,10 +194,9 @@ int main()
 	int Status;
 	XAxiVdma_Config *vdmaConfig;
 	int i;
-	u32 csi_frames_before;
-	u32 csi_frames_after;
 
 	xil_printf("color_test camera diagnostic start\r\n");
+	xil_printf("Camera recovery v1: capture before stream, maximum 3 attempts\r\n");
 
 	/*
 	 * Initialize an array of pointers to the 3 frame buffers
@@ -127,24 +208,11 @@ int main()
 		Xil_DCacheFlushRange((INTPTR) pFrames[i], DEMO_MAX_FRAME) ;
 	}
 
-	PsGpioSetup() ;
-	/*
-	 * Reset sensor
-	 */
-	XGpioPs_WritePin(&Gpio, 54, 0) ;
-	usleep(1000000);
-	XGpioPs_WritePin(&Gpio, 54, 1) ;
-	usleep(1000000);
-	/*
-	 * Initialize i2c
-	 */
-	Status = i2c_init(&ps_i2c0, XPAR_XIICPS_0_DEVICE_ID,100000);
+	Status = PsGpioSetup();
 	if (Status != XST_SUCCESS) {
-		xil_printf("Camera I2C initialization failed\r\n");
+		xil_printf("Camera GPIO initialization failed\r\n");
 		return Status;
 	}
-
-
 	Xil_Out32(XPAR_AXI_GAMMACORRECTION_0_BASEADDR, 3);
 	/*
 	 * Initialize VDMA driver
@@ -153,12 +221,14 @@ int main()
 	if (!vdmaConfig)
 	{
 		xil_printf("No video DMA found for ID %d\r\n", VGA_VDMA_ID);
+		return XST_FAILURE;
 
 	}
 	Status = XAxiVdma_CfgInitialize(&vdma, vdmaConfig, vdmaConfig->BaseAddress);
 	if (Status != XST_SUCCESS)
 	{
 		xil_printf("VDMA Configuration Initialization failed %d\r\n", Status);
+		return XST_FAILURE;
 
 	}
 
@@ -169,6 +239,7 @@ int main()
 	if (Status != XST_SUCCESS)
 	{
 		xil_printf("Display Ctrl initialization failed during demo initialization%d\r\n", Status);
+		return XST_FAILURE;
 
 	}
 	DemoPrintTest(dispCtrl.framePtr[dispCtrl.curFrame], dispCtrl.vMode.width,
@@ -177,39 +248,23 @@ int main()
 	if (Status != XST_SUCCESS)
 	{
 		xil_printf("Couldn't start display during demo initialization%d\r\n", Status);
+		return XST_FAILURE;
 
 	}
 	xil_printf("HDMI color bars for 5 seconds\r\n");
 	usleep(5000000);
 
 
-	/*
-	 * Initialize sensor
-	 */
-	Status = sensor_init(&ps_i2c0);
-	if (Status != XST_SUCCESS) {
-		xil_printf("Camera sensor initialization failed\r\n");
-		return Status;
+	Status = CameraStart();
+	if (Status != XST_SUCCESS) return Status;
+	/* Monitor continuously; each recovery has at most three start attempts. */
+	while (1) {
+		if (CameraCheck(0) != XST_SUCCESS) {
+			xil_printf("Camera stream stalled or errored; restarting capture\r\n");
+			Status = CameraStart();
+			if (Status != XST_SUCCESS) return Status;
+		}
 	}
-	xil_printf("Camera sensor initialization complete\r\n");
-	/*
-	 * Start Sensor Vdma
-	 * */
-	Status = vdma_write_init(XPAR_AXIVDMA_1_DEVICE_ID, HORSIZE,VERSIZE,DEMO_STRIDE,(unsigned int)dispCtrl.framePtr[dispCtrl.curFrame]);
-	if (Status != XST_SUCCESS) {
-		xil_printf("Camera VDMA initialization failed: %d\r\n", Status);
-		return Status;
-	}
-	csi_frames_before = Xil_In32(XPAR_MIPI_CSI_2_RX_0_S_AXI_LITE_BASEADDR + 0x04);
-	usleep(2000000);
-	csi_frames_after = Xil_In32(XPAR_MIPI_CSI_2_RX_0_S_AXI_LITE_BASEADDR + 0x04);
-	xil_printf("CSI long packets: %u -> %u, CRC errors: %u\r\n",
-		csi_frames_before, csi_frames_after,
-		Xil_In32(XPAR_MIPI_CSI_2_RX_0_S_AXI_LITE_BASEADDR + 0x08));
-	xil_printf("Camera VDMA S2MM status: 0x%08x\r\n",
-		Xil_In32(XPAR_AXIVDMA_1_BASEADDR + 0x34));
-	if (csi_frames_after == csi_frames_before)
-		xil_printf("No CSI long packets received in 2 seconds\r\n");
 
 	return 0;
 }
@@ -221,6 +276,7 @@ void DemoPrintTest(u8 *frame, u32 width, u32 height, u32 stride, int pattern)
 	u32 iPixelAddr = 0;
 	u8 wRed, wBlue, wGreen;
 	u32 xInt;
+	(void)pattern;
 
 	xInt = width*BYTES_PIXEL / 8; //each with width/8 pixels
 
@@ -302,6 +358,7 @@ int PsGpioSetup()
 	int Status ;
 
 	GPIO_CONFIG = XGpioPs_LookupConfig(XPAR_XGPIOPS_0_DEVICE_ID) ;
+	if (GPIO_CONFIG == NULL) return XST_FAILURE;
 
 	Status = XGpioPs_CfgInitialize(&Gpio, GPIO_CONFIG, GPIO_CONFIG->BaseAddr) ;
 	if (Status != XST_SUCCESS)
