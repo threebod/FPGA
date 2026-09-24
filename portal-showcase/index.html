@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="基于 FPGA 机器视觉与定点几何引擎的 Portal 数字光路交互概念原型。"
+    />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23061018'/%3E%3Cellipse cx='22' cy='32' rx='10' ry='20' fill='none' stroke='%2300b7ff' stroke-width='6'/%3E%3Cellipse cx='42' cy='32' rx='10' ry='20' fill='none' stroke='%23ff8a1f' stroke-width='6'/%3E%3C/svg%3E"
+    />
+    <title>FPGA Portal 智能解谜平台｜概念交互原型</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-blue" aria-hidden="true"></div>
+    <div class="ambient ambient-orange" aria-hidden="true"></div>
+
+    <main class="shell">
+      <header class="topbar">
+        <div class="identity">
+          <div class="portal-mark" aria-hidden="true">
+            <span></span><span></span>
+          </div>
+          <div>
+            <p class="eyebrow">FPGA · MACHINE VISION · SPATIAL MAPPING</p>
+            <h1>实体化 Portal 智能解谜平台</h1>
+          </div>
+        </div>
+        <div class="prototype-badge">
+          <span class="status-dot" aria-hidden="true"></span>
+          概念交互原型
+        </div>
+      </header>
+
+      <section class="intro" aria-labelledby="project-summary">
+        <div>
+          <h2 id="project-summary">让 FPGA 看懂桌面，也运行它的空间规则</h2>
+          <p>实体道具由视觉定位，数字光路由 FPGA 实时计算。</p>
+        </div>
+        <div class="design-targets" aria-label="设计目标">
+          <span><small>设计目标</small>640×480 @ 30 fps</span>
+          <span><small>设计目标</small>P95 更新延迟 ≤ 100 ms</span>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <article class="simulator-card" aria-labelledby="simulator-title">
+          <div class="card-head">
+            <div>
+              <p class="section-index">01 / DIGITAL TWIN</p>
+              <h2 id="simulator-title">二维光路实验台</h2>
+            </div>
+            <div class="simulator-actions">
+              <div class="mode-switch" role="group" aria-label="工作模式">
+                <button class="mode-button active" type="button" data-mode="ray">光路演示</button>
+                <button class="mode-button" type="button" data-mode="planner">尺寸规划</button>
+              </div>
+              <button id="resetButton" type="button">
+                <span aria-hidden="true">↺</span> 重置场景
+              </button>
+            </div>
+          </div>
+
+          <div class="canvas-toolbar">
+            <span id="interactionHint">拖动主体 · 拖动端点旋转</span>
+            <span id="boardReadout">80 × 60 cm 实体区域</span>
+          </div>
+
+          <div class="canvas-frame">
+            <canvas
+              id="portalCanvas"
+              width="1000"
+              height="600"
+              tabindex="0"
+              aria-label="Portal 数字光路交互画布。拖动镜面或传送门改变光路，选中后可用方向键移动，方括号键旋转。"
+            ></canvas>
+            <div class="canvas-label" aria-hidden="true">
+              <span>TOP VIEW / XY PLANE</span>
+              <span>LIVE GEOMETRY</span>
+            </div>
+          </div>
+
+          <div class="legend" aria-label="图例">
+            <span><i class="legend-line ray"></i>数字光线</span>
+            <span><i class="legend-line mirror"></i>可移动镜面</span>
+            <span><i class="legend-ring blue"></i>入口 Portal</span>
+            <span><i class="legend-ring orange"></i>出口 Portal</span>
+          </div>
+        </article>
+
+        <aside class="telemetry" aria-label="系统状态与尺寸设置">
+          <div class="telemetry-head">
+            <div>
+              <p class="section-index">02 / TELEMETRY</p>
+              <h2 id="sidePanelTitle">实时状态</h2>
+            </div>
+            <span id="systemState" class="state-pill">计算中</span>
+          </div>
+
+          <div id="telemetryPanel" class="side-panel">
+            <div class="result-panel" id="resultPanel">
+              <div class="result-icon" aria-hidden="true">◎</div>
+              <div>
+                <small>光路判定</small>
+                <strong id="resultTitle">目标已命中</strong>
+                <p id="resultDetail">光路闭环有效</p>
+              </div>
+            </div>
+
+            <dl class="metrics">
+              <div>
+                <dt>场景对象</dt>
+                <dd><strong id="objectCount">7</strong><span>个</span></dd>
+              </div>
+              <div>
+                <dt>镜面反射</dt>
+                <dd><strong id="reflectionCount">1</strong><span>次</span></dd>
+              </div>
+              <div>
+                <dt>Portal 穿越</dt>
+                <dd><strong id="portalCount">1</strong><span>次</span></dd>
+              </div>
+              <div>
+                <dt>传播段数</dt>
+                <dd><strong id="segmentCount">3</strong><span>/ 12</span></dd>
+              </div>
+            </dl>
+
+            <div class="pipeline-wrap">
+              <div class="pipeline-title">
+                <span>FPGA 数据链</span>
+                <small>PL HARDWARE PATH</small>
+              </div>
+              <ol class="pipeline">
+                <li><b>01</b><span>视觉定位</span><small>Camera / ROI</small></li>
+                <li><b>02</b><span>对象表</span><small>BRAM Snapshot</small></li>
+                <li><b>03</b><span>定点几何</span><small>Ray Engine</small></li>
+                <li><b>04</b><span>HDMI 叠加</span><small>Digital Twin</small></li>
+              </ol>
+            </div>
+
+            <div class="architecture-note">
+              <span>异构控制架构</span>
+              <p>ARM负责摄像头配置、标定参数与关卡管理，FPGA负责实时视觉、定点几何和显示。</p>
+            </div>
+          </div>
+
+          <form id="plannerPanel" class="side-panel planner-panel" hidden>
+            <div class="field-group">
+              <label for="boardSize">实体区域</label>
+              <select id="boardSize">
+                <option value="80x60">80 × 60 cm</option>
+                <option value="60x40">60 × 40 cm</option>
+              </select>
+              <small id="scaleReadout">640×480视野：8.0 px/cm</small>
+            </div>
+
+            <div class="selected-object-card">
+              <span>当前元件</span>
+              <strong id="selectedObjectName">镜面 A</strong>
+              <small id="selectedObjectShape">圆角长方形板</small>
+            </div>
+
+            <div class="form-grid">
+              <label>X 坐标<input id="inputX" type="number" step="0.5" /></label>
+              <label>Y 坐标<input id="inputY" type="number" step="0.5" /></label>
+              <label id="lengthField">长度<input id="inputLength" type="number" min="1" step="0.5" /></label>
+              <label id="widthField">宽度<input id="inputWidth" type="number" min="1" step="0.5" /></label>
+              <label id="radiusField" hidden>直径<input id="inputDiameter" type="number" min="1" step="0.5" /></label>
+              <label>角度<input id="inputAngle" type="number" step="1" /></label>
+              <label>标记尺寸<input id="inputMarker" type="number" min="0.5" step="0.5" /></label>
+            </div>
+
+            <button id="restoreObjectButton" class="secondary-button" type="button">恢复该元件推荐尺寸</button>
+
+            <div class="recognition-card">
+              <div>
+                <span>识别尺寸评估</span>
+                <strong id="recognitionStatus">尺寸充足</strong>
+              </div>
+              <b id="markerPixelReadout">24 px</b>
+            </div>
+
+            <div class="warning-panel">
+              <div class="pipeline-title"><span>设计检查</span><small>LIVE CHECK</small></div>
+              <ul id="warningList" aria-live="polite"></ul>
+            </div>
+
+            <p class="planner-footnote">尺寸为顶视投影近似值。正式制作时应保持标记顶面无遮挡，并通过实物摄像头复测。</p>
+          </form>
+        </aside>
+      </section>
+
+      <footer>
+        <span>VISION → RECONSTRUCTION → GEOMETRY → DISPLAY</span>
+        <span>数字光路演示 · 非真实激光系统</span>
+      </footer>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

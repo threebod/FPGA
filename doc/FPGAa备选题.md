@@ -8,7 +8,7 @@
 
 3. 实体化minecraft红石系统
 
-   ![image-20260913232229096](E:\Download\project\FPGA\image-20260913232229096.png)
+   ![image-20260913232229096](image-20260913232229096.png)
 
 4. 基于fpga的体态游戏
 
