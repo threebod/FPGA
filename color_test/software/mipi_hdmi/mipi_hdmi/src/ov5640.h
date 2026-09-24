@@ -16,4 +16,6 @@ struct reginfo
 #define SEQUENCE_END	     0xFFFF
 #define IIC_DEVICE_ID	XPAR_XIICPS_0_DEVICE_ID
 int sensor_init(XIicPs *IicInstance);
+int sensor_configure(XIicPs *IicInstance);
+int sensor_start(XIicPs *IicInstance);
 #endif

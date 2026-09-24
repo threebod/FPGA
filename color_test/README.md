@@ -24,7 +24,7 @@ AXI4-Stream 的 `TVALID/TREADY/TKEEP/TUSER/TLAST`。
 在仓库根目录执行：
 
 ```powershell
-E:\Xilinx\Vivado\2023.1\bin\vivado.bat -mode batch `
+& "$env:XILINX_VIVADO\bin\vivado.bat" -mode batch `
   -source .\color_test\tools\build_bitstream.tcl
 ```
 
@@ -53,26 +53,43 @@ E:\Xilinx\Vivado\2023.1\bin\vivado.bat -mode batch `
 4. 依次放置纯红、纯蓝和橙色色卡，确认 HDMI 图像中的目标颜色被替换为固定高亮色，
    其他区域保持原图。
 
-当前地址映射与官方工程一致，因此保留的官方 ELF 可用于首轮 JTAG 验证。目录中的
-`bootimage/BOOT.bin` 仍是官方原始镜像，不包含本工程的新 bitstream，不要用它验证
-颜色高亮功能。
+旧版 `software/mipi_hdmi/mipi_hdmi/Debug/mipi_hdmi.elf` 只执行一次摄像头诊断，
+随后会从 `main()` 返回，不能用于验证复位恢复。请构建并使用
+`build/camera_recovery/output/camera_recovery.elf`。
 
-## SD 卡启动
+### JTAG 下载
 
-`sd_boot/BOOT.bin` 是使用 Vitis 2023.1 Bootgen 打包的当前颜色高亮版本，依次包含：
-
-1. `software/mipi_hdmi/color_test/zynq_fsbl/fsbl.elf`（当前硬件平台生成的 FSBL）；
-2. `color_test.runs/impl_1/system_wrapper.bit`（颜色高亮 bitstream）；
-3. `software/mipi_hdmi/mipi_hdmi/Debug/mipi_hdmi.elf`（当前重新编译的应用）。
-
-注意不要误用 `software/mipi_hdmi/mipi_hdmi.elf`：它是 2020 年的原始 ELF。
-重新编译硬件或应用后，应在 `sd_boot` 目录重新运行：
+首次下载或完全断电后，在 `color_test` 目录执行完整下载脚本。脚本依次配置 PL、初始化
+PS、下载恢复版 ELF，并运行 Cortex-A9 #0：
 
 ```powershell
-& 'E:\Xilinx\Vitis\2023.1\bin\bootgen.bat' -arch zynq -image boot.bif -o BOOT.bin -w on
+& "$env:XILINX_VITIS\bin\xsct.bat" tools/program_camera_jtag.tcl
 ```
 
-将 MicroSD 卡的启动分区格式化为 FAT32，把 `sd_boot/BOOT.bin` 复制到分区根目录。
+如果只是按了处理器 Reset，且 PL 中的 bitstream 仍然存在，可以只重新下载 ELF：
+
+```powershell
+& "$env:XILINX_VITIS\bin\xsct.bat" tools/run_camera_recovery.tcl
+```
+
+这两个脚本均使用相对路径。`program_camera_jtag.tcl` 要求先生成 bitstream 和
+`camera_recovery.elf`。
+
+## SD 卡启动（可选）
+
+恢复版启动镜像由 `sd_boot/recovery/boot.bif` 描述，依次包含：
+
+1. `build/camera_recovery/camera_platform/zynq_fsbl/fsbl.elf`；
+2. `color_test.runs/impl_1/system_wrapper.bit`；
+3. `build/camera_recovery/output/camera_recovery.elf`。
+
+完成硬件和软件构建后，在 `sd_boot/recovery` 目录运行：
+
+```powershell
+& "$env:XILINX_VITIS\bin\bootgen.bat" -arch zynq -image boot.bif -o BOOT.bin -w on
+```
+
+将 MicroSD 卡的启动分区格式化为 FAT32，把 `sd_boot/recovery/BOOT.bin` 复制到分区根目录。
 断电后插卡，按 AX7Z020B 板卡上的启动模式跳线/丝印切换到 SD 启动，再上电。
 串口使用 115200 波特率观察 FSBL 和应用日志，同时检查 HDMI 摄像头画面及颜色高亮。
 本仓库只完成了镜像生成与分区检查；当前环境未连接 SD 卡，尚未完成上板启动验证。
@@ -84,12 +101,14 @@ E:\Xilinx\Vivado\2023.1\bin\vivado.bat -mode batch `
 使用 ILA 时，必须下载同一次实现生成的 `system_wrapper.bit` 和 `system_wrapper.ltx`。
 本次实现的 USER 扫描链为 1，可在 Hardware Manager 的 Tcl Console 中设置
 `set_property BSCAN_SWITCH_USER_MASK 1 [get_hw_devices xc7z020_1]` 后刷新设备。
-新的 bitstream 和 BOOT.bin 已生成，但尚未上板验证；时序报告中有 83 条 CSI IP 内置 ILA
-内部的跨时钟路径违例（WNS -2.913 ns），视频处理路径的时序满足约束。
+新的 bitstream 已通过完整 JTAG 下载脚本完成板上验证；时序报告中仍有 83 条 CSI IP
+内置 ILA 的跨时钟路径违例（WNS -2.913 ns），视频处理路径的时序满足约束。
 
 ## 摄像头串口诊断
 
-应用源码位于 `software/mipi_hdmi/mipi_hdmi/src/`。修改后在 Vitis 2023.1 中构建 `mipi_hdmi` 应用，确认 `software/mipi_hdmi/mipi_hdmi/Debug/mipi_hdmi.elf` 已更新，再按上面的命令重新打包 `sd_boot/BOOT.bin`；仅下载 bitstream 不会更新这些串口打印。
+应用源码位于 `software/mipi_hdmi/mipi_hdmi/src/`。修改后运行
+`tools/build_camera_recovery.tcl`，再按上面的命令重新生成
+`sd_boot/recovery/BOOT.bin`；仅下载 bitstream 不会更新这些串口打印。
 
 上电后观察 `OV5640 0x3008`、`CSI long packets` 和 `Camera VDMA S2MM status`：
 
@@ -103,6 +122,40 @@ E:\Xilinx\Vivado\2023.1\bin\vivado.bat -mode batch `
 - `OV5640 write failed` 会给出失败的寄存器地址；此时先检查 I²C 与摄像头供电。
 
 ## 迁移说明
+
+### 摄像头启动恢复版本（2026-09-24）
+
+`sensor_configure()` 完成寄存器配置后保持待机，采集 VDMA 就绪后由
+`sensor_start()` 开始出图。每次启动或运行中恢复最多尝试 3 次；每个 2 秒
+观察窗口要求 CSI 长包增长、CRC 无新增错误、VDMA 无错误且出现新的帧完成状态。
+正常运行时持续检查，检测失败会打印计数和状态并重启采集。
+VDMA 复位等待上限为 1 秒，复位失败立即停止恢复；尝试耗尽后若能成功停止
+采集，则重新绘制诊断彩条。此版本不复位自定义 D-PHY/CSI 接收 IP。
+
+同时初始化采集 VDMA 的全部帧地址槽，并为摄像头 I2C 写入后的总线空闲等待
+增加超时。软件重试不能代替对摄像头参考时钟、接收 IP 复位与排线的板上检查。
+
+从 `color_test` 目录运行（按实际安装位置调整工具路径）：
+
+```powershell
+& "$env:XILINX_VITIS\bin\xsct.bat" tools/build_camera_recovery.tcl
+python sim/test_camera_recovery.py
+Push-Location sd_boot/recovery
+& "$env:XILINX_VITIS\bin\bootgen.bat" -arch zynq -image boot.bif -o BOOT.bin -w on
+Pop-Location
+```
+
+脚本在 `build/camera_recovery` 生成 BSP，并直接编译仓库源码，应用输出为
+`build/camera_recovery/output/camera_recovery.elf`。它使用仓库已有的修正
+Makefile 覆盖 XSA 内旧 MIPI 驱动的 Windows 通配符写法。
+故障注入测试需要主机 GCC，验证软件流程，不模拟真实 MIPI/VDMA 硬件。
+
+SD 启动请使用 `sd_boot/recovery/BOOT.bin`；旧的 `sd_boot/BOOT.bin` 和
+`software/mipi_hdmi/mipi_hdmi/Debug/mipi_hdmi.elf` 不会被本构建覆盖。
+新版本串口应出现 `Camera recovery v1`、`Camera start attempt 1/3`，成功后
+打印 `Camera capture ready on attempt N`。JTAG 上板验证中，CSI 长包计数在 500 ms
+内从 `0x000638E0` 增长到 `0x000667B0`，CRC 错误保持为 0，采集 VDMA 正常完成帧传输。
+仍建议分别做 10 次冷启动和 10 次 Reset，记录首次成功、重试成功和最终失败次数。
 
 Vivado 2023.1 会把官方 MIPI CSI-2 IP 内部的 `axis_data_fifo` 从 1.1 升级到 2.0。
 新版将同步 FIFO 的计数端口拆分为读/写计数端口，本工程在

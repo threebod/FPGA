@@ -335,7 +335,7 @@ int sensor_write_array(XIicPs *IicInstance, struct reginfo *regarray)
 	return XST_SUCCESS;
 }
 
-int sensor_init(XIicPs *IicInstance)
+int sensor_configure(XIicPs *IicInstance)
 {
 	u8 sensor_id[2] ;
 	int status;
@@ -393,6 +393,14 @@ int sensor_init(XIicPs *IicInstance)
 	status = sensor_write_array(IicInstance,cfg_advanced_awb);
 	if (status != XST_SUCCESS) return XST_FAILURE;
 
+	/* Leave the sensor in standby until the capture VDMA is ready. */
+	return XST_SUCCESS;
+}
+
+int sensor_start(XIicPs *IicInstance)
+{
+	u8 control;
+	int status;
 	//[7]=0 Software reset; [6]=0 Software power down; Default=0x02
 	status = ov5640_write(IicInstance,0x3008, 0x02);
 	if (status != XST_SUCCESS) {
@@ -400,12 +408,18 @@ int sensor_init(XIicPs *IicInstance)
 		return XST_FAILURE;
 	}
 
-	status = ov5640_read(IicInstance, 0x3008, &sensor_id[0]);
+	status = ov5640_read(IicInstance, 0x3008, &control);
 	if (status != XST_SUCCESS) {
 		xil_printf("OV5640 0x3008 read failed: %d\r\n", status);
 		return XST_FAILURE;
 	}
-	xil_printf("OV5640 0x3008 = 0x%02x (expected 0x02)\r\n", sensor_id[0]);
-	return sensor_id[0] == 0x02 ? XST_SUCCESS : XST_FAILURE;
+	xil_printf("OV5640 0x3008 = 0x%02x (expected 0x02)\r\n", control);
+	return control == 0x02 ? XST_SUCCESS : XST_FAILURE;
 }
 
+/* Preserve the original configure-and-start API for other callers. */
+int sensor_init(XIicPs *IicInstance)
+{
+	int status = sensor_configure(IicInstance);
+	return status == XST_SUCCESS ? sensor_start(IicInstance) : status;
+}
